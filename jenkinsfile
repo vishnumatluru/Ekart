@@ -1,0 +1,121 @@
+pipeline {
+    agent any
+    tools{
+        jdk 'jdk17'
+        maven 'maven'
+    }
+     environment {
+        SCANNER_HOME=tool 'sonar-scanner'
+    }
+   
+    stages {
+        stage('clean workspace'){
+            steps{
+                cleanWs()
+            }
+        }
+
+
+        stage('Checkout') {
+            steps {
+                sh 'pwd'
+                sh 'echo passed!!!!'
+               git branch: 'main', url: 'https://github.com/vishnumatluru/Ekart.git'
+                sh 'pwd'
+                sh 'ls'
+            }
+        }
+         stage("Sonarqube Analysis "){
+            steps{
+                withSonarQubeEnv('sonar-server') {
+                    
+                    sh ''' 
+                   mvn clean verify sonar:sonar \
+                   -Dsonar.projectKey=ekart-application \
+                   -Dsonar.host.url=http://3.11.79.167:9000 \
+                   -Dsonar.login=sqp_284c7712c34b624aae63fe419d80f20d5debe6a9 '''
+                }
+            }
+        }
+        
+       
+        stage('OWASP FS SCAN') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        stage('mvn clean') {
+            steps {
+                sh 'mvn clean'
+                }
+            }
+        stage('mvn test') {
+            steps {
+                sh 'mvn test'
+                }
+            }
+       stage('mvn install') {
+            steps {
+                sh 'mvn install'
+                 }
+            }
+        stage('TRIVY FS SCAN') {
+            steps {
+                sh "trivy fs . > trivyfs.txt"
+                }
+            }
+        stage('Deploy to Tomcat') {
+            steps {
+                
+                sh 'cd target/ cp shopping-cart-0.0.1-SNAPSHOT.jar /opt/tomcat/lib/'
+            }
+        }
+            
+        stage('Build Docker image') {
+            steps {
+             sh  'docker build -t ekart .'   
+             sh  'docker run -dit --name shopping -p 8078:8070 ekart'
+                }
+            }
+       stage('trivy-image-scan') {
+            steps {
+               sh 'trivy image ekart'
+                }
+            }
+        stage('dockerhub push') {
+            steps {
+                  script {
+              withDockerRegistry(credentialsId: 'docker')  {
+                      sh '''
+                        docker tag ekart vishnumatluru/ekart:latest
+                        docker push vishnumatluru/ekart:latest
+                      '''
+                   }
+               } 
+            }
+        }
+       stage('Ecr') {
+           steps {
+             sh '''
+             aws ecr get-login-password --region eu-west-2 | docker login --username AWS --password-stdin 654654349563.dkr.ecr.eu-west-2.amazonaws.com
+             docker tag ekart:latest 654654349563.dkr.ecr.eu-west-2.amazonaws.com/ekart:latest
+             docker push 654654349563.dkr.ecr.eu-west-2.amazonaws.com/ekart:latest
+              
+             '''
+             
+            }
+          }
+           stage('Deploy node to k8') {
+              steps {
+               sh 'aws eks update-kubeconfig --name EKS_CLOUD_VISHNU --region eu-west-2'
+               sh 'kubectl get ns'
+               sh 'kubectl apply -f deploymentservice.yml'
+            }
+            
+           }
+        }                
+    }
+         
+   
+  
